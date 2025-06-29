@@ -56,3 +56,532 @@ jobs:
         with:
           slack_channel_id: ${{ secrets.DOCS_ALERTS_SLACK_CHANNEL_ID }}
           slack_token: ${{ secrets.SLACK_DOCS_BOT_TOKEN }}
+---
+title: Using workflow templates
+shortTitle: Use workflow templates
+intro: '{% data variables.product.github %} provides workflow templates for a variety of languages and tooling.'
+redirect_from:
+  - /articles/setting-up-continuous-integration-using-github-actions
+  - /github/automating-your-workflow-with-github-actions/setting-up-continuous-integration-using-github-actions
+  - /actions/automating-your-workflow-with-github-actions/setting-up-continuous-integration-using-github-actions
+  - /actions/building-and-testing-code-with-continuous-integration/setting-up-continuous-integration-using-github-actions
+  - /actions/guides/setting-up-continuous-integration-using-workflow-templates
+  - /actions/learn-github-actions/using-workflow-templates
+  - /actions/using-workflows/using-starter-workflows
+  - /actions/learn-github-actions/using-starter-workflows
+  - /actions/writing-workflows/using-starter-workflows
+  - /actions/writing-workflows/using-workflow-templates
+versions:
+  fpt: '*'
+  ghes: '*'
+  ghec: '*'
+type: tutorial
+topics:
+  - Workflows
+  - CI
+  - CD
+---
+
+{% data reusables.actions.enterprise-github-hosted-runners %}
+
+## About workflow templates
+
+Workflow templates are templates that help you to create your own {% data variables.product.prodname_actions %} workflows for a repository. They offer an alternative to starting from a blank workflow file and are useful because some of the work will already have been done for you.
+
+{% data variables.product.github %} offers workflow templates for a variety of languages and tooling. When you set up workflows in your repository, {% data variables.product.github %} analyzes the code in your repository and recommends workflows based on the language and framework in your repository. For example, if you use Node.js, {% data variables.product.github %} will suggest a workflow template file that installs your Node.js packages and runs your tests. You can search and filter to find relevant workflow templates.
+
+{% data reusables.actions.workflow-templates-categories %}
+
+{% data reusables.actions.workflow-templates-repo-link %}
+
+You can also create your own workflow template to share with your organization. These workflow templates will appear alongside the {% data variables.product.github %}-provided workflow templates. Anyone with write access to the organization's `.github` repository can set up a workflow template. For more information, see [AUTOTITLE](/actions/using-workflows/creating-starter-workflows-for-your-organization).
+
+## Choosing and using a workflow template
+
+{% data reusables.repositories.navigate-to-repo %}
+{% data reusables.repositories.actions-tab %}
+{% data reusables.actions.new-starter-workflow %}
+1. The "Choose a workflow" page shows a selection of recommended workflow templates. Find the workflow template that you want to use, then click **Configure**. To help you find the workflow template that you want, you can search for keywords or filter by category.
+1. If the workflow template contains comments detailing additional setup steps, follow these steps.
+
+   There are guides to accompany many of the workflow templates for building and testing projects. For more information, see [AUTOTITLE](/actions/automating-builds-and-tests).
+
+1. Some workflow templates use secrets. For example, {% raw %}`${{ secrets.npm_token }}`{% endraw %}. If the workflow template uses a secret, store the value described in the secret name as a secret in your repository. For more information, see [AUTOTITLE](/actions/security-guides/using-secrets-in-github-actions).
+1. Optionally, make additional changes. For example, you might want to change the value of `on` to change when the workflow runs.
+1. Click **Start commit**.
+1. Write a commit message and decide whether to commit directly to the default branch or to open a pull request.
+
+## Further reading
+
+* [AUTOTITLE](/actions/automating-builds-and-tests/about-continuous-integration)
+* [AUTOTITLE](/actions/managing-workflow-runs)
+* [AUTOTITLE](/actions/monitoring-and-troubleshooting-workflows/about-monitoring-and-troubleshooting)
+{% ifversion fpt or ghec %}
+* [AUTOTITLE](/billing/managing-billing-for-github-actions)
+{% endif %}
+name: VVIP Audit - CI/CD & Automated Security Certification
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  # กำหนดค่ากลางสำหรับทุกคลาวด์
+  GCP_PROJECT_ID: your-gcp-project-id
+  AWS_REGION: ap-southeast-1
+  AZURE_APP_NAME: vvip-audit-app
+  IMAGE_NAME: vvip-audit # ชื่อ Image กลาง
+
+jobs:
+  # --- Job 1: ตรวจสอบคุณภาพโค้ดพื้นฐาน ---
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint code
+        run: npm run lint
+
+  # --- Job 2: ประตูรักษาความปลอดภัยและออกใบรับรองอัตโนมัติ ---
+  security-audit:
+    name: Automated Security Certification
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run CodeQL Analysis (SAST)
+        uses: github/codeql-action/analyze@v3
+        with:
+          language: 'javascript'
+
+      - name: Run Snyk to check for vulnerabilities (SCA)
+        uses: snyk/actions/node@master
+        continue-on-error: true # ตั้งเป็น true เพื่อให้เห็นรายงาน แต่ไม่หยุด pipeline ทันที (ปรับเปลี่ยนได้)
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: 'monitor'
+
+      - name: Run TruffleHog to find secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path:./
+          base: ${{ github.event.before }}
+          head: HEAD
+          extra_args: --only-verified
+
+  # --- Job 3: สร้างและสแกน Docker Image ---
+  build-and-push:
+    name: Build, Scan, and Push Docker Image
+    needs: security-audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        id: docker_build
+        uses: docker/build-push-action@v5
+        with:
+          context:.
+          push: false # ยังไม่ push
+          load: true # โหลด image เข้าสู่ runner เพื่อสแกน
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Scan image for vulnerabilities with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1' # ทำให้ pipeline fail หากพบช่องโหว่ระดับ CRITICAL
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      # (ส่วนของการ Login และ Push ไปยัง Registries ต่างๆ จะอยู่ตรงนี้)
+      #... (นำโค้ดจากเวอร์ชันก่อนหน้ามาใส่)...
+      # หลังจากสแกนผ่านแล้วจึงทำการ Push
+
+  # --- Job 4: ปรับใช้ (Upload) สู่คลาวด์ ---
+  deploy:
+    name: Deploy to Cloud
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    #... (ส่วนที่เหลือของ Job deploy เหมือนเดิม)...
+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
+            - ชื่อ: ตั้งค่าสภาพแวดล้อม Node.js
+  ใช้: actions/setup-node@v3.9.1
+  กับ:
+    # ตั้งค่า always-auth ใน npmrc
+    always-auth: # ตัวเลือก ค่าเริ่มต้นคือ false
+    # เวอร์ชัน ข้อมูลจำเพาะของเวอร์ชันที่จะใช้ ตัวอย่าง: 12.x, 10.15.1, >=10.15.0
+    เวอร์ชันโหนด: # ตัวเลือก
+    # ไฟล์ที่ประกอบด้วยข้อมูลจำเพาะของเวอร์ชันที่จะใช้ ตัวอย่าง: .nvmrc, .node-version, .tool-versions
+    ไฟล์ node-version: # ตัวเลือก
+    # สถาปัตยกรรมเป้าหมายสำหรับ Node ที่จะใช้ ตัวอย่าง: x86, x64 จะใช้สถาปัตยกรรมระบบตามค่าเริ่มต้น
+    สถาปัตยกรรม: # ตัวเลือก
+    # ตั้งค่าตัวเลือกนี้หากคุณต้องการให้การดำเนินการตรวจสอบเวอร์ชันล่าสุดที่มีอยู่ซึ่งตรงตามข้อกำหนดเวอร์ชัน
+    ตรวจสอบล่าสุด: # ตัวเลือก
+    # รีจิสทรีเสริมสำหรับการตั้งค่าการรับรองความถูกต้อง จะตั้งค่ารีจิสทรีในไฟล์ .npmrc และ .yarnrc ในระดับโครงการ และตั้งค่าการรับรองความถูกต้องเพื่ออ่านข้อมูลจาก env.NODE_AUTH_TOKEN
+    registry-url: # ตัวเลือก
+    # ขอบเขตเสริมสำหรับการรับรองความถูกต้องกับรีจิสทรีที่มีขอบเขต จะกลับไปเป็นของเจ้าของที่เก็บข้อมูลเมื่อใช้รีจิสทรี GitHub Packages (https://npm.pkg.github.com/)
+    ขอบเขต: # ตัวเลือก
+    # ใช้ในการดึงข้อมูลการแจกจ่ายโหนดจากเวอร์ชันโหนด เนื่องจากมีค่าเริ่มต้น จึงมักไม่ได้ระบุโดยผู้ใช้ เมื่อเรียกใช้การดำเนินการนี้บน github.com ค่าเริ่มต้นก็เพียงพอแล้ว เมื่อเรียกใช้บน GHES คุณสามารถส่งโทเค็นการเข้าถึงส่วนบุคคลสำหรับ github.com ได้หากคุณประสบปัญหาการจำกัดอัตรา
+    โทเค็น: # ตัวเลือก ค่าเริ่มต้นคือ ${{ github.server_url == 'https://github.com' && github.token || '' }}
+    # ใช้เพื่อระบุตัวจัดการแพ็คเกจสำหรับการแคชในไดเร็กทอรีเริ่มต้น ค่าที่รองรับ: npm, yarn, pnpm
+    แคช: # ตัวเลือก
+    # ใช้เพื่อระบุเส้นทางไปยังไฟล์การอ้างอิง: package-lock.json, yarn.lock เป็นต้น รองรับไวด์การ์ดหรือรายชื่อไฟล์เพื่อแคชการอ้างอิงหลายรายการ
+    เส้นทางการพึ่งพาแคช: # ตัวเลือก
+                - ชื่อ: ดาวน์โหลดสิ่งประดิษฐ์สร้าง
+  การใช้งาน: actions/download-artifact@v4.3.0
+  กับ:
+    # ชื่อของสิ่งประดิษฐ์ที่จะดาวน์โหลด หากไม่ได้ระบุ สิ่งประดิษฐ์ทั้งหมดสำหรับการเรียกใช้จะถูกดาวน์โหลด
+    ชื่อ: # ตัวเลือก
+    # ID ของสิ่งประดิษฐ์ที่จะดาวน์โหลด คั่นด้วยจุลภาค สามารถใช้ทั้ง `artifact-ids` หรือ `name` ได้ แต่ไม่สามารถใช้ทั้งสองอย่างได้
+    artifact-ids: # ตัวเลือก
+    # เส้นทางปลายทาง รองรับการขยายเครื่องหมายทิลเดอพื้นฐาน ค่าเริ่มต้นคือ $GITHUB_WORKSPACE
+    เส้นทาง: # ตัวเลือก
+    # รูปแบบ glob ที่ตรงกับสิ่งประดิษฐ์ที่ควรดาวน์โหลด จะถูกละเว้นหากระบุชื่อ
+    รูปแบบ: # ตัวเลือก
+    # เมื่อจับคู่สิ่งประดิษฐ์หลายรายการแล้ว พฤติกรรมของไดเร็กทอรีปลายทางจะเปลี่ยนไป หากเป็นจริง สิ่งประดิษฐ์ที่ดาวน์โหลดจะอยู่ในไดเร็กทอรีเดียวกันที่ระบุโดยเส้นทาง หากเป็นเท็จ สิ่งประดิษฐ์ที่ดาวน์โหลดจะถูกแยกออกเป็นไดเร็กทอรีที่มีชื่อเฉพาะภายในเส้นทางที่ระบุ
+    รวมหลายรายการ: # ตัวเลือก ค่าเริ่มต้นคือเท็จ
+    # โทเค็น GitHub ที่ใช้ในการตรวจสอบสิทธิ์ด้วย GitHub API โทเค็นนี้จำเป็นเมื่อดาวน์โหลดอาร์ทิแฟกต์จากที่เก็บข้อมูลอื่นหรือจากการทำงานเวิร์กโฟลว์อื่น หากไม่ได้ระบุสิ่งนี้ การดำเนินการจะพยายามดาวน์โหลดอาร์ทิแฟกต์จากที่เก็บข้อมูลปัจจุบันและการทำงานเวิร์กโฟลว์ปัจจุบัน
+    github-token: # ตัวเลือก
+    # เจ้าของที่เก็บข้อมูลและชื่อที่เก็บข้อมูลเชื่อมกันด้วย "/" หากระบุ github-token นี่คือที่เก็บข้อมูลที่จะดาวน์โหลดสิ่งประดิษฐ์
+    ที่เก็บข้อมูล: # ตัวเลือก ค่าเริ่มต้นคือ ${{ github.repository }}
+    # ID ของเวิร์กโฟลว์ที่ทำการอัปโหลดอาร์ติแฟกต์ที่ต้องการ หากระบุ github-token นี่คือการรันที่อาร์ติแฟกต์จะถูกดาวน์โหลดจาก
+    run-id: # ตัวเลือก ค่าเริ่มต้นคือ ${{ github.run_id }}
+                      - ชื่อ: การตั้งค่าสภาพแวดล้อม Go
+  การใช้งาน: actions/setup-go@v5.5.0
+  กับ:
+    # เวอร์ชัน Go สำหรับดาวน์โหลด (หากจำเป็น) และใช้งาน รองรับสเปกและช่วงของเซมเวอร์ โปรดใส่ตัวเลือกนี้ไว้ในเครื่องหมายคำพูดเดี่ยว
+    go-version: # ตัวเลือก
+    # เส้นทางไปยังไฟล์ go.mod หรือ go.work
+    go-version-file: # ตัวเลือก
+    # ตั้งค่าตัวเลือกนี้เป็นจริง หากคุณต้องการให้การดำเนินการตรวจสอบเวอร์ชันล่าสุดที่มีอยู่ซึ่งตรงตามข้อกำหนดเวอร์ชันเสมอ
+    ตรวจสอบล่าสุด: # ตัวเลือก
+    # ใช้ในการดึงข้อมูลการแจกจ่าย Go จากเวอร์ชัน go เนื่องจากมีค่าเริ่มต้น จึงมักไม่ได้ระบุโดยผู้ใช้ เมื่อเรียกใช้การดำเนินการนี้บน github.com ค่าเริ่มต้นก็เพียงพอแล้ว เมื่อเรียกใช้บน GHES คุณสามารถส่งโทเค็นการเข้าถึงส่วนบุคคลสำหรับ github.com ได้หากคุณประสบปัญหาการจำกัดอัตรา
+    โทเค็น: # ตัวเลือก ค่าเริ่มต้นคือ ${{ github.server_url == 'https://github.com' && github.token || '' }}
+    # ใช้เพื่อระบุว่าจำเป็นต้องมีการแคชหรือไม่ ตั้งค่าเป็น true หากคุณต้องการเปิดใช้งานการแคช
+    แคช: # ตัวเลือก ค่าเริ่มต้นคือ true
+    # ใช้เพื่อระบุเส้นทางไปยังไฟล์การอ้างอิง - go.sum
+    เส้นทางการพึ่งพาแคช: # ตัวเลือก
+    # สถาปัตยกรรมเป้าหมายสำหรับ Go ที่จะใช้ ตัวอย่าง: x86, x64 จะใช้สถาปัตยกรรมระบบตามค่าเริ่มต้น
+    สถาปัตยกรรม: # ตัวเลือก
+                      - ชื่อ: การตั้งค่าสภาพแวดล้อม Go
+  การใช้งาน: actions/setup-go@v5.5.0
+  กับ:
+    # เวอร์ชัน Go สำหรับดาวน์โหลด (หากจำเป็น) และใช้งาน รองรับสเปกและช่วงของเซมเวอร์ โปรดใส่ตัวเลือกนี้ไว้ในเครื่องหมายคำพูดเดี่ยว
+    go-version: # ตัวเลือก
+    # เส้นทางไปยังไฟล์ go.mod หรือ go.work
+    go-version-file: # ตัวเลือก
+    # ตั้งค่าตัวเลือกนี้เป็นจริง หากคุณต้องการให้การดำเนินการตรวจสอบเวอร์ชันล่าสุดที่มีอยู่ซึ่งตรงตามข้อกำหนดเวอร์ชันเสมอ
+    ตรวจสอบล่าสุด: # ตัวเลือก
+    # ใช้ในการดึงข้อมูลการแจกจ่าย Go จากเวอร์ชัน go เนื่องจากมีค่าเริ่มต้น จึงมักไม่ได้ระบุโดยผู้ใช้ เมื่อเรียกใช้การดำเนินการนี้บน github.com ค่าเริ่มต้นก็เพียงพอแล้ว เมื่อเรียกใช้บน GHES คุณสามารถส่งโทเค็นการเข้าถึงส่วนบุคคลสำหรับ github.com ได้หากคุณประสบปัญหาการจำกัดอัตรา
+    โทเค็น: # ตัวเลือก ค่าเริ่มต้นคือ ${{ github.server_url == 'https://github.com' && github.token || '' }}
+    # ใช้เพื่อระบุว่าจำเป็นต้องมีการแคชหรือไม่ ตั้งค่าเป็น true หากคุณต้องการเปิดใช้งานการแคช
+    แคช: # ตัวเลือก ค่าเริ่มต้นคือ true
+    # ใช้เพื่อระบุเส้นทางไปยังไฟล์การอ้างอิง - go.sum
+    เส้นทางการพึ่งพาแคช: # ตัวเลือก
+    # สถาปัตยกรรมเป้าหมายสำหรับ Go ที่จะใช้ ตัวอย่าง: x86, x64 จะใช้สถาปัตยกรรมระบบตามค่าเริ่มต้น
+    สถาปัตยกรรม: # ตัวเลือก
+                      - ชื่อ : ปิดประเด็นเก่า
+  ใช้: actions/stale@v9.1.0
+  กับ:
+    # โทเค็นสำหรับที่เก็บข้อมูล สามารถส่งผ่านได้โดยใช้ `{{ secrets.GITHUB_TOKEN }}`
+    repo-token: # ตัวเลือก ค่าเริ่มต้นคือ ${{ github.token }}
+    # ข้อความที่จะโพสต์เกี่ยวกับปัญหาเมื่อแท็กปัญหา หากไม่มีข้อความใด ๆ ระบุไว้ ระบบจะไม่ทำเครื่องหมายว่าปัญหานั้นล้าสมัย
+    ข้อความแจ้งปัญหาเก่า: # ตัวเลือก
+    # ข้อความที่จะโพสต์บนคำขอแบบ pull request เมื่อทำการแท็ก หากไม่มีข้อความระบุไว้ จะไม่ทำเครื่องหมายคำขอแบบ pull request ว่าล้าสมัย
+    ข้อความ stale-pr: # ตัวเลือก
+    # ข้อความที่จะโพสต์เกี่ยวกับปัญหาเมื่อปิดปัญหา หากไม่มีข้อความระบุไว้ จะไม่แสดงความคิดเห็นเมื่อปิดปัญหา
+    ปิดข้อความปัญหา: # ตัวเลือก
+    # ข้อความที่จะโพสต์บนคำขอแบบ pull request เมื่อปิดคำขอ หากไม่ได้ระบุไว้ ข้อความจะไม่แสดงความเห็นเมื่อปิดคำขอแบบ pull request
+    ข้อความปิด: # ตัวเลือก
+    # จำนวนวันที่ปัญหาหรือคำขอดึงข้อมูลสามารถระบุได้ก่อนที่จะทำเครื่องหมายว่าไม่เกี่ยวข้อง ตั้งค่าเป็น -1 เพื่อไม่ให้ทำเครื่องหมายปัญหาหรือคำขอดึงข้อมูลว่าไม่เกี่ยวข้องโดยอัตโนมัติ
+    days-before-stale: # ตัวเลือก ค่าเริ่มต้นคือ 60
+    # จำนวนวันที่ปัญหามีอายุก่อนที่จะทำเครื่องหมายว่าไม่เกี่ยวข้อง ตั้งค่าเป็น -1 เพื่อไม่ให้ทำเครื่องหมายว่าปัญหาไม่เกี่ยวข้องโดยอัตโนมัติ แทนที่ตัวเลือก "วันก่อนไม่เกี่ยวข้อง" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    วันก่อนปัญหาหมดอายุ: # ตัวเลือก
+    # จำนวนวันที่สามารถดึงคำขอได้ก่อนที่จะทำเครื่องหมายว่าไม่เกี่ยวข้อง ตั้งค่าเป็น -1 เพื่อไม่ให้ทำเครื่องหมายคำขอดึงว่าไม่เกี่ยวข้องโดยอัตโนมัติ แทนที่ตัวเลือก "วันก่อนไม่เกี่ยวข้อง" ที่เกี่ยวข้องกับคำขอดึงเท่านั้น
+    วันก่อนวันวางจำหน่าย: # ตัวเลือก
+    # จำนวนวันที่ต้องรอเพื่อปิดปัญหาหรือคำขอการดึงข้อมูลหลังจากที่ถูกทำเครื่องหมายว่าล้าสมัย ตั้งค่าเป็น -1 เพื่อไม่ให้ปิดปัญหาหรือคำขอการดึงข้อมูลที่ไม่ล้าสมัย
+    วันก่อนปิด: # ตัวเลือก ค่าเริ่มต้นคือ 7
+    # จำนวนวันที่ต้องรอเพื่อปิดปัญหาหลังจากถูกทำเครื่องหมายว่าเก่าแล้ว ตั้งค่าเป็น -1 เพื่อไม่ให้ปิดปัญหาเก่าเลย แทนที่ตัวเลือก "วันก่อนปิด" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    วันก่อนปิดประเด็น: # ตัวเลือก
+    # จำนวนวันที่ต้องรอเพื่อปิดคำขอแบบ pull request หลังจากถูกทำเครื่องหมายว่าเก่าแล้ว ตั้งค่าเป็น -1 เพื่อไม่ให้ปิดคำขอแบบ pull request ที่เก่าแล้ว แทนที่ตัวเลือก "days-before-close" ที่เกี่ยวข้องกับคำขอแบบ pull request เท่านั้น
+    วันก่อนปิดประมูล: # ตัวเลือก
+    # ป้ายกำกับที่จะใช้เมื่อปัญหาไม่มีความเกี่ยวข้อง
+    stale-issue-label: # ตัวเลือก ค่าเริ่มต้นคือ Stale
+    # ป้ายกำกับที่จะใช้เมื่อปัญหาถูกปิด
+    ปิดป้ายปัญหา: # ตัวเลือก
+    # ป้ายกำกับที่หมายถึงปัญหาจะได้รับการยกเว้นจากการทำเครื่องหมายว่าเก่าแล้ว คั่นป้ายกำกับหลายรายการด้วยเครื่องหมายจุลภาค (เช่น "label1,label2")
+    exempt-issue-labels: # ตัวเลือก ค่าเริ่มต้นคือ
+    # เหตุผลในการปิดประเด็น
+    เหตุผลการปิดปัญหา: # ตัวเลือก ค่าเริ่มต้นคือไม่ได้วางแผนไว้
+    # ป้ายกำกับที่จะใช้เมื่อคำขอการดึงข้อมูลไม่ทันสมัย
+    stale-pr-label: # ตัวเลือก ค่าเริ่มต้นคือ Stale
+    # ป้ายกำกับที่จะใช้เมื่อคำขอการดึงถูกปิด
+    close-pr-label: # ตัวเลือก
+    # ป้ายกำกับที่หมายถึงคำขอแบบ pull request จะได้รับการยกเว้นจากการถูกทำเครื่องหมายว่าล้าสมัย คั่นป้ายกำกับหลายรายการด้วยเครื่องหมายจุลภาค (เช่น "label1,label2")
+    exempt-pr-labels: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ไมล์สโตนที่หมายถึงปัญหาหรือคำขอการดึงจะได้รับการยกเว้นจากการถูกทำเครื่องหมายว่าล้าสมัย คั่นไมล์สโตนหลายรายการด้วยเครื่องหมายจุลภาค (เช่น "ไมล์สโตน1, ไมล์สโตน2")
+    exempt-milestones: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ไมล์สโตนที่หมายถึงปัญหาได้รับการยกเว้นจากการทำเครื่องหมายว่าล้าสมัย คั่นไมล์สโตนหลายรายการด้วยเครื่องหมายจุลภาค (เช่น "ไมล์สโตน1, ไมล์สโตน2") แทนที่ตัวเลือก "ไมล์สโตนยกเว้น" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    exempt-issue-milestones: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ไมล์สโตนที่หมายถึงคำขอการดึงจะได้รับการยกเว้นจากการถูกทำเครื่องหมายว่าล้าสมัย คั่นไมล์สโตนหลายรายการด้วยเครื่องหมายจุลภาค (เช่น "ไมล์สโตน1, ไมล์สโตน2") แทนที่ตัวเลือก "ไมล์สโตนที่ได้รับการยกเว้น" ที่เกี่ยวข้องกับคำขอการดึงเท่านั้น
+    exempt-pr-milestones: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ยกเว้นปัญหาทั้งหมดและคำขอการดึงที่มีเหตุการณ์สำคัญจากการถูกทำเครื่องหมายว่าล้าสมัย ค่าเริ่มต้นคือเท็จ
+    exempt-all-milestones: # ตัวเลือก ค่าเริ่มต้นคือ false
+    # ยกเว้นปัญหาทั้งหมดที่มีเหตุการณ์สำคัญจากการถูกทำเครื่องหมายว่าล้าสมัย แทนที่ตัวเลือก "ยกเว้นเหตุการณ์สำคัญทั้งหมด" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    ยกเว้นประเด็นสำคัญทั้งหมด: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ยกเว้นคำขอแบบ pull request ทั้งหมดที่มีจุดสำคัญจากการถูกทำเครื่องหมายว่าล้าสมัย แทนที่ตัวเลือก "exempt-all-milestones" ที่เกี่ยวข้องกับคำขอแบบ pull request เท่านั้น
+    exempt-all-pr-milestones: # ตัวเลือก ค่าเริ่มต้นคือ
+    # หากไม่เกี่ยวข้อง จะมีการตรวจสอบเฉพาะปัญหาหรือคำขอดึงที่มีป้ายกำกับเหล่านี้ทั้งหมดเท่านั้น โดยค่าเริ่มต้นคือ `` (ปิดใช้งาน) และสามารถเป็นรายการป้ายกำกับที่คั่นด้วยจุลภาคได้
+    only-labels: # ตัวเลือก ค่าเริ่มต้นคือ
+    # หากไม่ทันสมัย ​​จะมีการตรวจสอบเฉพาะปัญหาหรือคำขอดึงที่มีป้ายกำกับอย่างน้อยหนึ่งรายการเท่านั้น โดยค่าเริ่มต้นคือ `` (ปิดใช้งาน) และสามารถเป็นรายการป้ายกำกับที่คั่นด้วยจุลภาคได้
+    any-of-labels: # ตัวเลือก ค่าเริ่มต้นคือ
+    # หากเก่าเกินไป จะตรวจสอบเฉพาะปัญหาที่เกิดขึ้นกับฉลากอย่างน้อยหนึ่งฉลากเท่านั้น โดยค่าเริ่มต้นคือ `` (ปิดใช้งาน) และสามารถเป็นรายการฉลากที่คั่นด้วยจุลภาคได้ แทนที่ตัวเลือก "any-of-labels" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    any-of-issue-labels: # ตัวเลือก ค่าเริ่มต้นคือ
+    # หากคำขอแบบดึงข้อมูลเก่า จะมีการตรวจสอบเฉพาะคำขอแบบดึงข้อมูลที่มีป้ายกำกับอย่างน้อยหนึ่งรายการเท่านั้น โดยค่าเริ่มต้นคือ `` (ปิดใช้งาน) และสามารถเป็นรายการป้ายกำกับที่คั่นด้วยจุลภาคได้ แทนที่ตัวเลือก "any-of-labels" ที่เกี่ยวข้องกับคำขอแบบดึงข้อมูลเท่านั้น
+    any-of-pr-labels: # ตัวเลือก ค่าเริ่มต้นคือ
+    # หากฉลากเก่า จะมีการตรวจสอบเฉพาะปัญหาที่เกิดขึ้นกับฉลากเหล่านี้ทั้งหมดเท่านั้น โดยค่าเริ่มต้นคือ `[]` (ปิดใช้งาน) และสามารถเป็นรายการฉลากที่คั่นด้วยจุลภาคได้ แทนที่ตัวเลือก "only-labels" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    only-issue-labels: # ตัวเลือก ค่าเริ่มต้นคือ
+    # หากคำขอแบบดึงข้อมูลเก่า จะมีการตรวจสอบเฉพาะคำขอแบบดึงข้อมูลที่มีป้ายกำกับเหล่านี้ทั้งหมดเท่านั้น โดยค่าเริ่มต้นคือ `[]` (ปิดใช้งาน) และสามารถเป็นรายการป้ายกำกับที่คั่นด้วยจุลภาคได้ แทนที่ตัวเลือก "only-labels" ที่เกี่ยวข้องกับคำขอแบบดึงข้อมูลเท่านั้น
+    only-pr-labels: # ตัวเลือก ค่าเริ่มต้นคือ
+    # จำนวนสูงสุดของการดำเนินการต่อการทำงาน ใช้เพื่อควบคุมอัตราการจำกัด (เกี่ยวข้องกับ GitHub API CRUD)
+    การดำเนินการต่อรอบ: # ตัวเลือก ค่าเริ่มต้นคือ 30
+    # ลบฉลากที่ไม่เกี่ยวข้องออกจากปัญหาและดึงคำขอเมื่อมีการอัปเดตหรือแสดงความคิดเห็น
+    remove-stale-when-updated: # ตัวเลือก ค่าเริ่มต้นคือ true
+    # ลบป้ายกำกับเก่าออกจากปัญหาเมื่อมีการอัปเดตหรือแสดงความคิดเห็น แทนที่ตัวเลือก "remove-stale-when-updated" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    remove-issue-stale-when-updated: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ลบป้ายกำกับเก่าออกจากคำขอแบบ pull request เมื่อมีการอัปเดตหรือแสดงความคิดเห็น แทนที่ตัวเลือก "remove-stale-when-updated" ที่เกี่ยวข้องกับคำขอแบบ pull request เท่านั้น
+    remove-pr-stale-when-updated: # ตัวเลือก ค่าเริ่มต้นคือ
+    # เรียกใช้โปรเซสเซอร์ในโหมดดีบักโดยไม่ต้องดำเนินการใดๆ กับปัญหาปัจจุบัน
+    ดีบักเท่านั้น: # ตัวเลือก ค่าเริ่มต้นคือเท็จ
+    # ลำดับในการรับปัญหาหรือคำขอการดึง ค่าเริ่มต้นคือ false ซึ่งเรียงจากมากไปน้อย
+    จากน้อยไปมาก: # ตัวเลือก ค่าเริ่มต้นคือเท็จ
+    # ลบสาขา git หลังจากปิดคำขอการดึงข้อมูลที่ล้าสมัย
+    delete-branch: # ตัวเลือก, ค่าเริ่มต้นคือ false
+    # วันที่ที่ใช้ในการข้ามการดำเนินการล้าสมัยในปัญหา/คำขอการดึงที่สร้างไว้ก่อนหน้า (ISO 8601 หรือ RFC 2822)
+    วันที่เริ่มต้น: # ตัวเลือก, ค่าเริ่มต้นคือ
+    # ผู้รับมอบหมายที่ยกเว้นปัญหาหรือคำขอดึงจากการถูกทำเครื่องหมายว่าล้าสมัย แยกผู้รับมอบหมายหลายรายด้วยเครื่องหมายจุลภาค (เช่น "user1, user2")
+    ผู้รับมอบหมายยกเว้น: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ผู้รับมอบหมายที่ยกเว้นปัญหาจากการถูกทำเครื่องหมายว่าไม่มีข้อมูล ให้คั่นผู้รับมอบหมายหลายรายด้วยเครื่องหมายจุลภาค (เช่น "user1, user2") ยกเลิกตัวเลือก "exempt-assignees" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    ผู้รับมอบหมายปัญหาที่ได้รับการยกเว้น: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ผู้รับมอบหมายที่ยกเว้นคำขอแบบ pull request จากการถูกทำเครื่องหมายว่าไม่เกี่ยวข้อง แยกผู้รับมอบหมายหลายคนด้วยเครื่องหมายจุลภาค (เช่น "user1, user2") แทนที่ตัวเลือก "exempt-assignees" ที่เกี่ยวข้องกับคำขอแบบ pull request เท่านั้น
+    ผู้ได้รับมอบหมายที่ได้รับการยกเว้น: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ยกเว้นปัญหาทั้งหมดและคำขอการดึงข้อมูลกับผู้รับมอบหมายจากการถูกทำเครื่องหมายว่าล้าสมัย ค่าเริ่มต้นคือเท็จ
+    ยกเว้นผู้รับมอบหมายทั้งหมด: # ตัวเลือก ค่าเริ่มต้นคือเท็จ
+    # ยกเว้นปัญหาทั้งหมดกับผู้รับมอบหมายจากการถูกทำเครื่องหมายว่าไม่เกี่ยวข้อง ยกเลิกตัวเลือก "ยกเว้นผู้รับมอบหมายทั้งหมด" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    ยกเว้นผู้รับมอบหมายปัญหาทั้งหมด: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ยกเว้นคำขอดึงทั้งหมดที่มีผู้รับมอบหมายจากการถูกทำเครื่องหมายว่าล้าสมัย แทนที่ตัวเลือก "ยกเว้นผู้รับมอบหมายทั้งหมด" ที่เกี่ยวข้องกับคำขอดึงเท่านั้น
+    ยกเว้นผู้รับมอบหมายทั้งหมด: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ยกเว้นคำขอแบบร่างที่ถูกทำเครื่องหมายว่าล้าสมัย ค่าเริ่มต้นคือเท็จ
+    exempt-draft-pr: # ตัวเลือก ค่าเริ่มต้นคือ false
+    # แสดงสถิติบางส่วนในตอนท้ายที่เกี่ยวข้องกับเวิร์กโฟลว์ที่ล้าสมัย (เฉพาะเมื่อเปิดใช้งานบันทึก)
+    เปิดใช้งานสถิติ: # ตัวเลือก ค่าเริ่มต้นคือจริง
+    # รายการป้ายกำกับที่คั่นด้วยจุลภาคที่จะเพิ่มเมื่อปัญหาหรือคำขอดึงข้อมูลไม่ทันสมัย
+    ป้ายที่จะเพิ่มเมื่อไม่เก่า: # ตัวเลือก ค่าเริ่มต้นคือ
+    # รายการป้ายกำกับที่คั่นด้วยจุลภาคที่ต้องการลบออกเมื่อปัญหาหรือคำขอดึงข้อมูลกลายเป็นข้อมูลเก่า
+    ป้ายที่ต้องลบออกเมื่อหมดอายุ: # ตัวเลือก ค่าเริ่มต้นคือ
+    # รายการป้ายกำกับที่คั่นด้วยจุลภาคที่ต้องการลบออกเมื่อปัญหาหรือคำขอดึงข้อมูลไม่ทันสมัย
+    ป้ายที่จะลบออกเมื่อไม่เก่า: # ตัวเลือก ค่าเริ่มต้นคือ
+    # การอัปเดตใดๆ (อัปเดต/แสดงความคิดเห็น) สามารถรีเซ็ตเวลาว่างที่ไม่จำเป็นในปัญหาต่างๆ และการดึงคำขอได้
+    ignore-updates: # ตัวเลือก ค่าเริ่มต้นคือ false
+    # การอัปเดตใดๆ (การอัปเดต/ความคิดเห็น) สามารถรีเซ็ตระยะเวลาการหยุดทำงานชั่วคราวสำหรับปัญหาต่างๆ ได้ ยกเลิกตัวเลือก "ignore-updates" ที่เกี่ยวข้องกับปัญหาเท่านั้น
+    ignore-issue-updates: # ตัวเลือก ค่าเริ่มต้นคือ
+    # การอัปเดตใดๆ (การอัปเดต/ความคิดเห็น) สามารถรีเซ็ตเวลาว่างที่ไม่จำเป็นบนคำขอแบบดึงได้ แทนที่ตัวเลือก "ignore-updates" ที่เกี่ยวข้องกับคำขอแบบดึงเท่านั้น
+    ignore-pr-updates: # ตัวเลือก ค่าเริ่มต้นคือ
+    # เฉพาะปัญหาหรือการดึงคำขอที่มีผู้รับมอบหมายเท่านั้นที่จะถูกทำเครื่องหมายเป็นล้าสมัยโดยอัตโนมัติ
+    include-only-assigned: # ตัวเลือก ค่าเริ่มต้นคือเท็จ
+          
+                      - ชื่อ: การดำเนินการปรับใช้ Velocity
+  # คุณสามารถปักหมุดตามคอมมิตที่แน่นอนหรือเวอร์ชันได้
+  # ใช้: codeclimate/velocity-deploy-action@1b4a22f0db113bf8d85c14fd726cf0ec6d17cd13
+  ใช้: codeclimate/velocity-deploy-action@v1.0.0
+  กับ:
+    # โทเค็นการปรับใช้ Velocity ของคุณ
+    โทเค็น:
+    # แท็กเวอร์ชันสำหรับการปรับใช้ (เช่น `b123`)
+    เวอร์ชัน: # ตัวเลือก
+    # สภาพแวดล้อมในการใช้งาน (เช่น `การผลิต`)
+    สิ่งแวดล้อม: # ตัวเลือก
+                      - ชื่อ: เครื่องมือตรวจสอบลิงก์ของ HashiCorp
+  # คุณสามารถปักหมุดตามคอมมิตที่แน่นอนหรือเวอร์ชันได้
+  # ใช้: hashicorp/gh-action-check-broken-links@9da9ec2d83f88fe981a856c3f03aca64e68af90c
+  ใช้: hashicorp/gh-action-check-broken-links@v1
+  กับ:
+    # URL ฐานที่จะลิงก์จะถูกแก้ไข
+    ฐาน URL:
+    # รายชื่อไฟล์ที่จะสแกนเพื่อตรวจสอบการมีอยู่ของลิงก์
+    ไฟล์: # ตัวเลือก
+    # รายการ URL ที่จะถูกละเว้นแบบบรรทัดใหม่
+    ไวท์ลิสต์: # ตัวเลือก
+                      - ชื่อ: สภาพแวดล้อมการดูตัวอย่าง
+  # คุณสามารถปักหมุดตามคอมมิตที่แน่นอนหรือเวอร์ชันได้
+  # ใช้: UffizziCloud/preview-action@6f946b7c6d38a24e28a134e6f833783dfaaaf782
+  การใช้งาน: UffizziCloud/preview-action@v2.6.1
+  กับ:
+    # ไฟล์เรียบเรียงทางเลือก
+    compose-file: # ตัวเลือก ค่าเริ่มต้นคือ docker-compose.yaml
+    # URL ไปยังอุฟฟิซซี่
+    เซิร์ฟเวอร์: # ค่าเริ่มต้นคือ https://app.uffizzi.com
+    # ชื่อผู้ใช้ Uffizzi
+    ชื่อผู้ใช้: # ตัวเลือก
+    # รหัสผ่านอุฟฟิซซี่
+    รหัสผ่าน: # ตัวเลือก
+    # กระสุนโครงการอุฟฟิซิ
+    โครงการ: # ตัวเลือก
+    # ชื่อผู้ใช้สำหรับการยืนยันตัวตนกับ GHCR
+    ghcr-ชื่อผู้ใช้: # ตัวเลือก
+    # รหัสผ่านเพื่อยืนยันตัวตนกับ GHCR
+    ghcr-access-token: # ตัวเลือก
+    # ค่าของบริบท `github.event.number`
+    github-event-number: # ตัวเลือก
+    # ค่าของบริบท `github.ref`
+    github-ref: # ตัวเลือก
+    # ค่าของบริบท `github.repository`
+    github-repository: # ตัวเลือก
+    -
+    โทเค็นคำขอ: # ตัวเลือก
+    -
+    request-token-url: # ตัวเลือก
+    -
+    ชื่อผู้ใช้ dockerhub: # ตัวเลือก
+    -
+    dockerhub-password: # ตัวเลือก
+    # ชื่อผู้ใช้ Azure
+    acr-username: # ตัวเลือก
+    # รหัสผ่าน Azure
+    acr-password: # ตัวเลือก
+    # URL รีจิสทรี Azure
+    acr-registry-url: # ตัวเลือก
+    # รหัสการเข้าถึง Amazon Web Services
+    aws-access-key-id: # ตัวเลือก
+    # คีย์การเข้าถึงความลับของ Amazon Web Services
+    aws-secret-access-key: # ตัวเลือก
+    # URL ของรีจิสทรี Amazon Web Services
+    aws-registry-url: # ตัวเลือก
+    # คีย์บริการ Google Cloud
+    gcloud-service-key: # ตัวเลือก
+    # ชื่อผู้ใช้รีจิสทรี Docker ที่กำหนดเอง
+    docker-registry-username: # ตัวเลือก
+    # รหัสผ่านรีจิสทรี Docker ที่กำหนดเอง
+    docker-registry-password: # ตัวเลือก
+    # URL รีจิสทรี Docker ที่กำหนดเอง
+    docker-registry-url: # ตัวเลือก
+                      - ชื่อ: สภาพแวดล้อมการดูตัวอย่าง
+  # คุณสามารถปักหมุดตามคอมมิตที่แน่นอนหรือเวอร์ชันได้
+  # ใช้: UffizziCloud/preview-action@6f946b7c6d38a24e28a134e6f833783dfaaaf782
+  การใช้งาน: UffizziCloud/preview-action@v2.6.1
+  กับ:
+    # ไฟล์เรียบเรียงทางเลือก
+    compose-file: # ตัวเลือก ค่าเริ่มต้นคือ docker-compose.yaml
+    # URL ไปยังอุฟฟิซซี่
+    เซิร์ฟเวอร์: # ค่าเริ่มต้นคือ https://app.uffizzi.com
+    # ชื่อผู้ใช้ Uffizzi
+    ชื่อผู้ใช้: # ตัวเลือก
+    # รหัสผ่านอุฟฟิซซี่
+    รหัสผ่าน: # ตัวเลือก
+    # กระสุนโครงการอุฟฟิซิ
+    โครงการ: # ตัวเลือก
+    # ชื่อผู้ใช้สำหรับการยืนยันตัวตนกับ GHCR
+    ghcr-ชื่อผู้ใช้: # ตัวเลือก
+    # รหัสผ่านเพื่อยืนยันตัวตนกับ GHCR
+    ghcr-access-token: # ตัวเลือก
+    # ค่าของบริบท `github.event.number`
+    github-event-number: # ตัวเลือก
+    # ค่าของบริบท `github.ref`
+    github-ref: # ตัวเลือก
+    # ค่าของบริบท `github.repository`
+    github-repository: # ตัวเลือก
+    -
+    โทเค็นคำขอ: # ตัวเลือก
+    -
+    request-token-url: # ตัวเลือก
+    -
+    ชื่อผู้ใช้ dockerhub: # ตัวเลือก
+    -
+    dockerhub-password: # ตัวเลือก
+    # ชื่อผู้ใช้ Azure
+    acr-username: # ตัวเลือก
+    # รหัสผ่าน Azure
+    acr-password: # ตัวเลือก
+    # URL รีจิสทรี Azure
+    acr-registry-url: # ตัวเลือก
+    # รหัสการเข้าถึง Amazon Web Services
+    aws-access-key-id: # ตัวเลือก
+    # คีย์การเข้าถึงความลับของ Amazon Web Services
+    aws-secret-access-key: # ตัวเลือก
+    # URL ของรีจิสทรี Amazon Web Services
+    aws-registry-url: # ตัวเลือก
+    # คีย์บริการ Google Cloud
+    gcloud-service-key: # ตัวเลือก
+    # ชื่อผู้ใช้รีจิสทรี Docker ที่กำหนดเอง
+    docker-registry-username: # ตัวเลือก
+    # รหัสผ่านรีจิสทรี Docker ที่กำหนดเอง
+    docker-registry-password: # ตัวเลือก
+    # URL รีจิสทรี Docker ที่กำหนดเอง
+    docker-registry-url: # ตัวเลือก
+                      - ชื่อ: การทำงานเป็นทีม GitHub Sync
+  # คุณสามารถปักหมุดตามคอมมิตที่แน่นอนหรือเวอร์ชันได้
+  # การใช้งาน: Teamwork/github-sync@42dcac69eb5a41fad0d518efeb6aecf1e45f8d01
+  ใช้: Teamwork/github-sync@v1.3.3
+  กับ:
+    # โทเค็น GitHub
+    โทเค็น GITHUB:
+    # URI การทำงานเป็นทีม
+    การทำงานเป็นทีม_URI:
+    # โทเค็น API การทำงานเป็นทีม
+    โทเค็นการทำงานเป็นทีม:
+    # คุณต้องการเปิดใช้งานการแท็กอัตโนมัติหรือไม่: true/false
+    AUTOMATIC_TAGGING: # ตัวเลือก
+    # ชื่อคอลัมน์ที่แยกแยะตัวพิมพ์เล็ก-ใหญ่ของคอลัมน์ที่คุณต้องการย้ายงานไปเมื่อเปิด PR แล้ว
+    BOARD_COLUMN_OPENED: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ชื่อคอลัมน์ที่แยกแยะตัวพิมพ์เล็ก-ใหญ่ของคอลัมน์ที่คุณต้องการย้ายงานไปเมื่อรวม PR เรียบร้อยแล้ว
+    BOARD_COLUMN_MERGED: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ชื่อคอลัมน์ที่แยกแยะตัวพิมพ์เล็ก-ใหญ่ของคอลัมน์ที่คุณต้องการย้ายงานไปถ้า PR ถูกปิดโดยไม่ได้ผสาน
+    BOARD_COLUMN_CLOSED: # ตัวเลือก ค่าเริ่มต้นคือ
+                      - ชื่อ: การทำงานเป็นทีม GitHub Sync
+  # คุณสามารถปักหมุดตามคอมมิตที่แน่นอนหรือเวอร์ชันได้
+  # การใช้งาน: Teamwork/github-sync@42dcac69eb5a41fad0d518efeb6aecf1e45f8d01
+  ใช้: Teamwork/github-sync@v1.3.3
+  กับ:
+    # โทเค็น GitHub
+    โทเค็น GITHUB:
+    # URI การทำงานเป็นทีม
+    การทำงานเป็นทีม_URI:
+    # โทเค็น API การทำงานเป็นทีม
+    โทเค็นการทำงานเป็นทีม:
+    # คุณต้องการเปิดใช้งานการแท็กอัตโนมัติหรือไม่: true/false
+    AUTOMATIC_TAGGING: # ตัวเลือก
+    # ชื่อคอลัมน์ที่แยกแยะตัวพิมพ์เล็ก-ใหญ่ของคอลัมน์ที่คุณต้องการย้ายงานไปเมื่อเปิด PR แล้ว
+    BOARD_COLUMN_OPENED: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ชื่อคอลัมน์ที่แยกแยะตัวพิมพ์เล็ก-ใหญ่ของคอลัมน์ที่คุณต้องการย้ายงานไปเมื่อรวม PR เรียบร้อยแล้ว
+    BOARD_COLUMN_MERGED: # ตัวเลือก ค่าเริ่มต้นคือ
+    # ชื่อคอลัมน์ที่แยกแยะตัวพิมพ์เล็ก-ใหญ่ของคอลัมน์ที่คุณต้องการย้ายงานไปถ้า PR ถูกปิดโดยไม่ได้ผสาน
+    BOARD_COLUMN_CLOSED: # ตัวเลือก ค่าเริ่มต้นคือ
+          
